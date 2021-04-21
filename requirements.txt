@@ -1,6 +1,8 @@
+torch
 PyYAML
 tqdm
-dgl-cu100==0.4.2
+#dgl-cu100==0.4.2
+dgl  # exact version does not seem to be available on python 3.9
 numpy
 transformers==2.3.0
 scikit-learn==0.22
