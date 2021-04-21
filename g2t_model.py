@@ -15,7 +15,8 @@ def replace_ent(x, ent, V, emb):
         return _x
     idx = ((x - V) * mask + 0 * (1.0 - mask)).long()
     return _x * (1.0 - mask[:, None]) + mask[:, None] * ent[
-        torch.arange(len(idx)).cuda(), idx
+        # torch.arange(len(idx)).cuda(), idx
+        torch.arange(len(idx)), idx
     ].view(_x.shape)
 
 
@@ -341,7 +342,8 @@ class GraphWriter(nn.Module):
             _inp = _mask * 3 + (1.0 - _mask) * batch["text"]  # 3 is <UNK>
             tar_inp = self.tar_emb(_inp.long())
             tar_inp = (1.0 - _mask[:, :, None]) * tar_inp + ent_enc[
-                torch.arange(len(batch["text"]))[:, None].cuda(),
+                # torch.arange(len(batch["text"]))[:, None].cuda(),
+                torch.arange(len(batch["text"]))[:, None],
                 ((batch["text"] - len(self.text_vocab)) * _mask).long(),
             ] * _mask[:, :, None]
             if self.config["vae_dim"] > 0:

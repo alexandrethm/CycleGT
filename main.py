@@ -454,7 +454,7 @@ def back_translation(
 
 def train(_type, config, load="tmp_vocab.pt"):
     dev_id = 0
-    device = torch.device(dev_id)
+    device = torch.device(dev_id) if torch.cuda.is_available() else torch.device('cpu')
     config["g2t"]["device"] = device
     config["t2g"]["device"] = device
     pool, vocab = prep_data(config["main"], load=load)
