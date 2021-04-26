@@ -1,3 +1,5 @@
+import os.path
+
 import tqdm
 import random
 import yaml
@@ -670,8 +672,9 @@ def main():
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    vocab = prep_data(config["main"])
-    torch.save({"vocab": vocab}, "tmp_vocab.pt")
+    if not os.path.isfile("tmp_vocab.pt"):
+        vocab = prep_data(config["main"])
+        torch.save({"vocab": vocab}, "tmp_vocab.pt")
     train("train", config)
 
 

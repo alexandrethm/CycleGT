@@ -8,6 +8,7 @@ import torch.utils.data
 
 
 def replace_ent(x, ent, V, emb):
+    device = torch.device(0) if torch.cuda.is_available() else torch.device('cpu')
     # replace the entity
     mask = (x >= V).float()
     _x = emb((x * (1.0 - mask) + 3 * mask).long())  # 3 is <UNK>
@@ -15,8 +16,7 @@ def replace_ent(x, ent, V, emb):
         return _x
     idx = ((x - V) * mask + 0 * (1.0 - mask)).long()
     return _x * (1.0 - mask[:, None]) + mask[:, None] * ent[
-        # torch.arange(len(idx)).cuda(), idx
-        torch.arange(len(idx)), idx
+        torch.arange(len(idx)).to(device), idx
     ].view(_x.shape)
 
 
@@ -337,13 +337,14 @@ class GraphWriter(nn.Module):
 
         if beam_size < 1:
             # training
+            device = torch.device(0) if torch.cuda.is_available() else torch.device('cpu')
             outs = []
             _mask = (batch["text"] >= len(self.text_vocab)).long()
             _inp = _mask * 3 + (1.0 - _mask) * batch["text"]  # 3 is <UNK>
             tar_inp = self.tar_emb(_inp.long())
             tar_inp = (1.0 - _mask[:, :, None]) * tar_inp + ent_enc[
                 # torch.arange(len(batch["text"]))[:, None].cuda(),
-                torch.arange(len(batch["text"]))[:, None],
+                torch.arange(len(batch["text"]))[:, None].to(device),
                 ((batch["text"] - len(self.text_vocab)) * _mask).long(),
             ] * _mask[:, :, None]
             if self.config["vae_dim"] > 0:
