@@ -1,4 +1,4 @@
-import torch as tc
+import torch as torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -48,7 +48,7 @@ class ModelLSTM(nn.Module):
         sents = batch["sents"]
         ents = batch["ents"]
         if self.blind:  # blind means using entity only
-            s = tc.zeros_like(sents)
+            s = torch.zeros_like(sents)
         else:
             s = sents
         bs, n = sents.size()
@@ -82,4 +82,4 @@ class ModelLSTM(nn.Module):
 
         alpha = alpha * ent_mask.view(bs, ne, 1, 1) * ent_mask.view(bs, 1, ne, 1)
 
-        return tc.log_softmax(alpha, -1)
+        return torch.log_softmax(alpha, -1)

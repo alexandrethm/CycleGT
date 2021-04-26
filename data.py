@@ -350,16 +350,19 @@ def batch2tensor_t2g(datas, device, vocab, add_inp=False):
         st, ed = [], []
         cstr = ""
         ent_order = []
-        for i, t in enumerate(data["text"]):
+        for i, t in enumerate(data["text"]):  # t: token id of each word in the data["text"] sentence
             if t >= len(vocab["text"]):
-                ff = (t - len(vocab["text"])) not in ent_order
+                # if t is the id of an entity token ("ENT_0", ...):
+                #   - add the entity text to cstr (without '<BOS>', '<EOS>' tokens)
+                #   - add to st and ed the indices of start and end characters (in sentence cstr), for every entity
+                ff = (t - len(vocab["text"])) not in ent_order  # t - len(vocab["text"]) = entity number
                 if ff:
                     st.append(len(cstr))
                 cstr += " ".join(
                     [x for x in vocab["text"](t, ents) if x[0] != "<" and x[-1] != ">"]
                 )
                 if ff:
-                    ent_order.append(t - len(vocab["text"]))
+                    ent_order.append(t - len(vocab["text"]))  # register entities in the order they appear
                     ed.append(len(cstr))
             else:
                 if vocab["text"](t)[0] == "<":
@@ -371,7 +374,9 @@ def batch2tensor_t2g(datas, device, vocab, add_inp=False):
         tok_abs = ["[CLS]"] + tokenizer.tokenize(cstr) + ["[SEP]"]
         _ent_pos = []
         for s, e in zip(st, ed):
-            guess_start = s - cstr[:s].count(" ") + 5
+            # from start/end indices of entities (s,e) in cstr, find new_s, new_e the start/end indices
+            # of entities in tok_abs, the tokenized version of cstr
+            guess_start = s - cstr[:s].count(" ") + 5  # ??
             guess_end = e - cstr[:e].count(" ") + 5
 
             new_s = -1
@@ -379,6 +384,7 @@ def batch2tensor_t2g(datas, device, vocab, add_inp=False):
             l = 0
             r = 0
             for i in range(len(tok_abs)):
+                # l, r: start/end indices of the text representation of tok_abs[i] in cstr
                 l = r
                 r = l + len(tok_abs[i]) - tok_abs[i].count("##") * 2
                 if l <= guess_start and guess_start < r:
@@ -386,9 +392,11 @@ def batch2tensor_t2g(datas, device, vocab, add_inp=False):
                 if l <= guess_end and guess_end < r:
                     new_e = i
             _ent_pos.append((new_s, new_e))
+        # order the list _ent_pos (start/end indices of every entity in tok_abs) so they are in the
+        # order of entity number (ENT_0, ENT_1, etc) instead of the order they appear in the sentence
         _order_ent_pos = []
         for _e in range(len(ents)):
-            if _e in ent_order:
+            if _e in ent_order:  # ent_order = [1, 0, 2] if text = "ENT_1 blabla ENT_0 blabla ENT_2"
                 idx = ent_order.index(_e)
                 _order_ent_pos.append(_ent_pos[idx])
             else:
@@ -397,8 +405,8 @@ def batch2tensor_t2g(datas, device, vocab, add_inp=False):
 
         ent_pos.append(_order_ent_pos)
         text.append(tokenizer.convert_tokens_to_ids(tok_abs))
-        _tgt = torch.zeros(MAX_ENT, MAX_ENT)
-        _tgt[: len(_ent_pos), : len(_ent_pos)] += 3  # <UNK>
+        _tgt = torch.zeros(MAX_ENT, MAX_ENT)  # 0: <PAD> (in all vocabs, including vocab["relation"])
+        _tgt[: len(_ent_pos), : len(_ent_pos)] += 3  # 3: <UNK>
         for _e1, _r, _e2 in data["raw_relation"]:
             if (
                 _e1 not in ent_order or _e2 not in ent_order
@@ -407,8 +415,12 @@ def batch2tensor_t2g(datas, device, vocab, add_inp=False):
             _tgt[_e1, _e2] = _r
         tgt.append(_tgt)
         ent_len = max(ent_len, len(_order_ent_pos))
+    # indices of bert tokens for the full sentences (entities as plain text), padded
     ret["sents"] = pad([torch.LongTensor(x) for x in text], "tensor").to(device)
+    # for every sentence of the batch, list of start/end indices for ENT_0, ENT_1, etc (in tokenized sentence)
     ret["ents"] = ent_pos
+    # shape (batch_size, max_ent_len, max_ent_len) - indexes of relations between each entities i, j
+    # (0 if there is no ENT_i or ENT_j in the data sample, 3 if there is no relation between ENT_i and ENT_j)
     ret["tgt"] = torch.stack(tgt, 0)[:, :ent_len, :ent_len].long().to(device)
     return ret
 
