@@ -29,7 +29,7 @@ t2g:
     weight_decay: 0.0
 
 main:
-    split: 1.1 
+    split: 1.1 # proportion of training dataset to consider (does nothing if >=1)
     epoch: 50
     pre_epoch: 10  # warmup epoch if using the warmup
     seed: 654321 
