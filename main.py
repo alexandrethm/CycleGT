@@ -145,11 +145,12 @@ def train_t2g_one_step(batch, model, optimizer, config, t2g_weight=None):
         # category weights
         weight = torch.from_numpy(t2g_weight).float().to(config["device"])
     optimizer.zero_grad()
-    pred = model(batch)
+    # logits for the relation type, between every entity tuple of the sentence
+    pred = model(batch)  # (bs, ne, ne, num_relations)
     if t2g_weight is not None:
         loss = F.nll_loss(
             pred.contiguous().view(-1, pred.shape[-1]),
-            batch["tgt"].contiguous().view(-1),
+            batch["tgt"].contiguous().view(-1),  # initially shape (bs, ne, ne)
             ignore_index=0,
             weight=weight,
         )

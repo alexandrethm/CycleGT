@@ -178,18 +178,24 @@ def scan_data(datas, vocab=None, sp=False):
 def get_graph(ent_len, rel_len, adj_edges):
     graph = dgl.DGLGraph()
 
+    # add one node for each entity
     graph.add_nodes(ent_len, {"type": torch.ones(ent_len) * NODE_TYPE["entity"]})
+    # add 1 root node
     graph.add_nodes(1, {"type": torch.ones(1) * NODE_TYPE["root"]})
+    # add one node for each relation
     graph.add_nodes(
         rel_len * 2, {"type": torch.ones(rel_len * 2) * NODE_TYPE["relation"]}
     )
+
+    # add a bidirectional relation between the root node and all entities
     graph.add_edges(ent_len, torch.arange(ent_len))
     graph.add_edges(torch.arange(ent_len), ent_len)
+    # add a relation for each node to itself
     graph.add_edges(
         torch.arange(ent_len + 1 + rel_len * 2), torch.arange(ent_len + 1 + rel_len * 2)
     )
-
     if len(adj_edges) > 0:
+        # for each relation in adj_edges [i, j] (between entity i and j), add relation to the graph
         graph.add_edges(*list(map(list, zip(*adj_edges))))
     return graph
 
@@ -199,6 +205,9 @@ def build_graph(ent_len, relations):
 
     adj_edges = []
     for i, r in enumerate(relations):
+        # for each entities A,B with relation r, add relations
+        # [(A,u), (u,B), (B,v), (v,A)]
+        # with u, v the two graph nodes that represent relation r
         st_ent, rt, ed_ent = r
         # according to the edge_softmax operator, we need to reverse the graph
         adj_edges.append([ent_len + 1 + 2 * i, st_ent])
@@ -298,13 +307,21 @@ def batch2tensor_g2t(datas, device, vocab):
     # raw batch to tensor
     ret = {}
     ret["ent_len"] = [len(x["ent_text"]) for x in datas]
+    # list of length bs, with list of sentence entities tokenized
+    # (bs, num_ent_i, ent_len_ij)
     ents = [vocab["entity"](x["ent_text"]) for x in datas]
     ret["raw_ent_text"] = ents
+    # (bs, max_sentence_len)
     ret["text"] = pad([torch.LongTensor(x["text"]) for x in datas], "tensor").to(device)
+    # (bs, max_sentence_len - 1)
     ret["tgt"] = ret["text"][:, 1:]
     ret["text"] = ret["text"][:, :-1]
+    # flattened list of entity token indices tensors
+    # (size sum(num_ent_i), for every batch element and for every entity entity in the sentence)
     ent_text = sum([[torch.LongTensor(y) for y in x["ent_text"]] for x in datas], [])
+    # size (sum(num_ent_i), max_entity_len)
     ret["ent_text"] = pad(ent_text, "tensor").to(device)
+    # size (bs, max_num_rel)
     ret["rel"] = pad([torch.LongTensor(x["relation"]) for x in datas], "tensor").to(
         device
     )

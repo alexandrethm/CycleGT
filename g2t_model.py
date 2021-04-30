@@ -8,7 +8,7 @@ import torch.utils.data
 
 
 def replace_ent(x, ent, V, emb):
-    device = torch.device(0) if torch.cuda.is_available() else torch.device('cpu')
+    device = torch.device(0) if torch.cuda.is_available() else torch.device("cpu")
     # replace the entity
     mask = (x >= V).float()
     _x = emb((x * (1.0 - mask) + 3 * mask).long())  # 3 is <UNK>
@@ -58,21 +58,23 @@ class MSA(nn.Module):
             q, k, v = self.WQ(inp1), inp2, inp2
         else:
             q, k, v = self.WQ(inp1), self.WK(inp2), self.WV(inp2)
+        # for ent_attn, inp1=_h with shape (bs, d)
+        # for copy_attn, inp1=outs with shape (bs, max_sent_len, 2*d)
         L1 = 1 if inp1.ndim == 2 else inp1.shape[1]
         if self.mode != "copy":
-            q = q / math.sqrt(H)
-        q = q.view(B, L1, NH, HD).permute(0, 2, 1, 3)
-        k = k.view(B, L2, NH, HD).permute(0, 2, 3, 1)
-        v = v.view(B, L2, NH, HD).permute(0, 2, 1, 3)
-        pre_attn = torch.matmul(q, k)
+            q = q / math.sqrt(H)  # why not in copy mode?
+        q = q.view(B, L1, NH, HD).permute(0, 2, 1, 3)  # (B, NH, L1, HD)
+        k = k.view(B, L2, NH, HD).permute(0, 2, 3, 1)  # (B, NH, HD, L2)
+        v = v.view(B, L2, NH, HD).permute(0, 2, 1, 3)  # (B, NH, L2, HD)
+        pre_attn = torch.matmul(q, k)  # (B, NH, L1, L2)
         if mask is not None:
             pre_attn = pre_attn.masked_fill(mask[:, None, None, :], -1e8)
         if self.mode == "copy":
-            return pre_attn.squeeze(1)
+            return pre_attn.squeeze(1)  # (B, L1, L2) since NH=1
         else:
             alpha = self.attn_drop(torch.softmax(pre_attn, -1))
             attn = (
-                torch.matmul(alpha, v)
+                torch.matmul(alpha, v)  # (B, NH, L1, HD)
                 .permute(0, 2, 1, 3)
                 .contiguous()
                 .view(B, L1, NH * HD)
@@ -98,15 +100,22 @@ class BiLSTM(nn.Module):
         )
 
     def forward(self, inp, mask, ent_len=None):
-        inp = self.drop(inp)
+        inp = self.drop(inp)  # (tot_ent, max_ent_len, dim_emb)
         lens = (mask == 0).sum(-1).long().tolist()
         pad_seq = pack_padded_sequence(
             inp, lens, batch_first=True, enforce_sorted=False
-        )
-        y, (_h, _c) = self.bilstm(pad_seq)
-        _h = _h.transpose(0, 1).contiguous()
-        _h = _h[:, -2:].view(_h.size(0), -1)  # two directions of the top-layer
-        ret = pad(_h.split(ent_len), out_type="tensor")
+        )  # data of shape (sum(ent_len_ij), dim_emb)
+        y, (_h, _c) = self.bilstm(
+            pad_seq
+        )  # y: packed sequence (dim=dim_h*2), h_t of the last layer for each t
+        _h = _h.transpose(
+            0, 1
+        ).contiguous()  # (tot_ent, num_layers*num_directions, dim_h), hidden state for t=seq_len
+        _h = _h[:, -2:].view(
+            _h.size(0), -1
+        )  # two directions of the top-layer  (tot_ent, dim_h*2=d)
+        # _h.split: list of len bs, each element is a (num_ent_i, d) tensor
+        ret = pad(_h.split(ent_len), out_type="tensor")  # (bs, max_num_ent, d)
         return ret
 
 
@@ -165,34 +174,34 @@ class GraphTrans(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        if config["graph_enc"] == "gat":
-            # we only support gtrans, don't use this one
-            self.gat = nn.ModuleList(
-                [
-                    GAT(
-                        config["nhid"],
-                        config["nhid"] // 4,
-                        4,
-                        attn_drop=config["attn_drop"],
-                        trans=False,
-                    )
-                    for _ in range(config["prop"])
-                ]
-            )
-        else:
-            self.gat = nn.ModuleList(
-                [
-                    GAT(
-                        config["nhid"],
-                        config["nhid"] // 4,
-                        4,
-                        attn_drop=config["attn_drop"],
-                        ffn_drop=config["drop"],
-                        trans=True,
-                    )
-                    for _ in range(config["prop"])
-                ]
-            )
+        # --- we only support gtrans, don't use this one
+        # if config["graph_enc"] == "gat":
+        #     self.gat = nn.ModuleList(
+        #         [
+        #             GAT(
+        #                 config["nhid"],
+        #                 config["nhid"] // 4,
+        #                 4,
+        #                 attn_drop=config["attn_drop"],
+        #                 trans=False,
+        #             )
+        #             for _ in range(config["prop"])
+        #         ]
+        #     )
+        assert config["graph_enc"] == "gtrans"
+        self.gat = nn.ModuleList(
+            [
+                GAT(
+                    in_feats=config["nhid"],
+                    out_feats=config["nhid"] // 4,
+                    num_heads=4,
+                    attn_drop=config["attn_drop"],
+                    ffn_drop=config["drop"],
+                    trans=True,
+                )
+                for _ in range(config["prop"])
+            ]
+        )
         self.prop = config["prop"]
 
     def forward(self, ent, ent_mask, ent_len, rel, rel_mask, graphs):
@@ -272,6 +281,8 @@ class GraphWriter(nn.Module):
         nn.init.xavier_normal_(self.ent_emb.weight)
         self.rel_emb = nn.Embedding(len(self.rel_vocab), config["nhid"], padding_idx=0)
         nn.init.xavier_normal_(self.rel_emb.weight)
+        # LSTM module takes an inout sequence and has an optimized for loop, while LSTMCell takes a single element
+        # -> useful for decoder (https://stackoverflow.com/questions/57048120/pytorch-lstm-vs-lstmcell)
         self.decode_lstm = nn.LSTMCell(
             config["dec_ninp"] + config["vae_dim"], config["nhid"]
         )
@@ -285,10 +296,10 @@ class GraphWriter(nn.Module):
         self.ln = nn.LayerNorm(config["nhid"])
 
         if config["vae_dim"] > 0:
-            self.vae_fc = nn.Linear(config["nhid"], config["vae_dim"] * 2)  # for q(z|x)
-            self.vae_pfc = nn.Linear(
-                config["nhid"] * 2, config["vae_dim"] * 2
-            )  # for p(z)
+            # for q(z|x) ---> typo? actually used for p(z)
+            self.vae_fc = nn.Linear(config["nhid"], config["vae_dim"] * 2)
+            # for p(z) ---> typo? actually used with vae_lstm for q(z|x)
+            self.vae_pfc = nn.Linear(config["nhid"] * 2, config["vae_dim"] * 2)
             self.vae_lstm = nn.LSTM(
                 config["nhid"], config["nhid"], batch_first=True, bidirectional=True
             )
@@ -296,14 +307,14 @@ class GraphWriter(nn.Module):
     def enc_forward(self, batch, ent_mask, ent_text_mask, ent_len, rel_mask):
         ent_enc = self.ent_enc(
             self.ent_emb(batch["ent_text"]), ent_text_mask, ent_len=batch["ent_len"]
-        )
-        rel_emb = self.rel_emb(batch["rel"])
+        )  # (bs, max_num_ent, d)
+        rel_emb = self.rel_emb(batch["rel"])  # (bs, max_num_rel, d)
         if self.blind:
             g_ent, g_root = ent_enc, ent_enc.mean(1)
         else:
             g_ent, g_root = self.graph_enc(
                 ent_enc, ent_mask, ent_len, rel_emb, rel_mask, batch["graph"]
-            )
+            )  # (bs, max_num_ent, d) and (bs, d)
         return self.ln(g_ent), g_root, ent_enc
 
     def get_vae_pz(self, inp):
@@ -321,14 +332,20 @@ class GraphWriter(nn.Module):
         return _z[:, : self.config["vae_dim"]], _z[:, self.config["vae_dim"] :]
 
     def forward(self, batch, beam_size=-1):
-        # three modes, beam_size==-1 means training, beam_size==1 means greedy decoding, and beam_size>1 means beam search
-        ent_mask = len2mask(batch["ent_len"], batch["ent_text"].device)
-        ent_text_mask = batch["ent_text"] == 0
+        # three modes:
+        # beam_size==-1 means training,
+        # beam_size==1 means greedy decoding,
+        # beam_size>1 means beam search
 
-        rel_mask = batch["rel"] == 0  # 0 means the <PAD>
+        # (bs, max_num_ent) bool tensor, with max_num_ent/rel the max nb of ent/rel in the batch sentences
+        # False if entity j exists in sentence i (i.e. if j < num_ent_i)
+        ent_mask = len2mask(batch["ent_len"], batch["ent_text"].device)
+        ent_text_mask = batch["ent_text"] == 0  # (sum(num_ent_i), max_ent_len)
+
+        rel_mask = batch["rel"] == 0  # (bs, max_num_rel), 0 means the <PAD>
         g_ent, g_root, ent_enc = self.enc_forward(
             batch, ent_mask, ent_text_mask, batch["ent_len"], rel_mask
-        )
+        )  # (bs, max_num_ent, d), except for g_root which is missing the 1st dim
 
         _h, _c = g_root, g_root.clone().detach()
         ctx = _h + self.ent_attn(_h, g_ent, mask=ent_mask)
@@ -337,16 +354,24 @@ class GraphWriter(nn.Module):
 
         if beam_size < 1:
             # training
-            device = torch.device(0) if torch.cuda.is_available() else torch.device('cpu')
+            device = (
+                torch.device(0) if torch.cuda.is_available() else torch.device("cpu")
+            )
             outs = []
-            _mask = (batch["text"] >= len(self.text_vocab)).long()
-            _inp = _mask * 3 + (1.0 - _mask) * batch["text"]  # 3 is <UNK>
+            _mask = (batch["text"] >= len(self.text_vocab)).long()  # 0 if token is in vocab, 1 if entity or unknown
+            _inp = _mask * 3 + (1.0 - _mask) * batch["text"]  # 3 is <UNK>, otherwise use token index
             tar_inp = self.tar_emb(_inp.long())
-            tar_inp = (1.0 - _mask[:, :, None]) * tar_inp + ent_enc[
-                # torch.arange(len(batch["text"]))[:, None].cuda(),
+            # Note: x[:,:,None] <-> unsqueeze(-1)
+
+            # embeddings for tokens in text vocab (0. if unknown or entity)
+            embeddings_text = (1.0 - _mask[:, :, None]) * tar_inp  # (bs, max_sent_len, d)
+            # embeddings for entity tokens (0. elsewhere)
+            embeddings_ent = ent_enc[
                 torch.arange(len(batch["text"]))[:, None].to(device),
-                ((batch["text"] - len(self.text_vocab)) * _mask).long(),
-            ] * _mask[:, :, None]
+                ((batch["text"] - len(self.text_vocab)) * _mask).long(),  # 0 for ENT_0 and other tokens, i for ENT_i
+            ]  # (bs, max_sent_len, d)
+            embeddings_ent = embeddings_ent * _mask[:, :, None]  # set to 0. if not entity
+            tar_inp = embeddings_text + embeddings_ent
             if self.config["vae_dim"] > 0:
                 mu, log_sigma = self.get_vae_qz(tar_inp)
                 vae_z = torch.exp(0.5 * log_sigma) * torch.randn_like(log_sigma) + mu
@@ -370,20 +395,20 @@ class GraphWriter(nn.Module):
 
             tar_inp = tar_inp.transpose(0, 1)
             for t, xt in enumerate(tar_inp):
-                _xt = torch.cat([ctx, xt, vae_z], 1)
-                _h, _c = self.decode_lstm(_xt, (_h, _c))
+                _xt = torch.cat([ctx, xt, vae_z], 1)  # (bs, 2*d+dim_z)
+                _h, _c = self.decode_lstm(_xt, (_h, _c))  # (bs, d)
                 ctx = _h + self.ent_attn(_h, g_ent, mask=ent_mask)
                 outs.append(torch.cat([_h, ctx], 1))
-            outs = torch.stack(outs, 1)
+            outs = torch.stack(outs, 1)  # (bs, max_sent_len, 2*d)
             copy_gate = torch.sigmoid(self.copy_fc(outs))
             EPSI = 1e-6
             # copy
             pred_v = torch.log(copy_gate + EPSI) + torch.log_softmax(
                 self.pred_v_fc(outs), -1
-            )
+            )  # (bs, max_sent_len, len(text_vocab))
             pred_c = torch.log((1.0 - copy_gate) + EPSI) + torch.log_softmax(
                 self.copy_attn(outs, ent_enc, mask=ent_mask), -1
-            )
+            )  # (bs, max_sent_len, max_num_ent)
             pred = torch.cat([pred_v, pred_c], -1)
             return pred, torch.exp(pred_c), kld_loss
         else:
