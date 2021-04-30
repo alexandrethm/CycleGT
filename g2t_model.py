@@ -105,15 +105,12 @@ class BiLSTM(nn.Module):
         pad_seq = pack_padded_sequence(
             inp, lens, batch_first=True, enforce_sorted=False
         )  # data of shape (sum(ent_len_ij), dim_emb)
-        y, (_h, _c) = self.bilstm(
-            pad_seq
-        )  # y: packed sequence (dim=dim_h*2), h_t of the last layer for each t
-        _h = _h.transpose(
-            0, 1
-        ).contiguous()  # (tot_ent, num_layers*num_directions, dim_h), hidden state for t=seq_len
-        _h = _h[:, -2:].view(
-            _h.size(0), -1
-        )  # two directions of the top-layer  (tot_ent, dim_h*2=d)
+        # y: packed sequence (dim=dim_h*2), h_t of the last layer for each t
+        y, (_h, _c) = self.bilstm(pad_seq)
+        # (tot_ent, num_layers*num_directions, dim_h), hidden state for t=seq_len
+        _h = _h.transpose(0, 1).contiguous()
+        # two directions of the top-layer  (tot_ent, dim_h*2=d)
+        _h = _h[:, -2:].view(_h.size(0), -1)
         # _h.split: list of len bs, each element is a (num_ent_i, d) tensor
         ret = pad(_h.split(ent_len), out_type="tensor")  # (bs, max_num_ent, d)
         return ret
@@ -358,19 +355,29 @@ class GraphWriter(nn.Module):
                 torch.device(0) if torch.cuda.is_available() else torch.device("cpu")
             )
             outs = []
-            _mask = (batch["text"] >= len(self.text_vocab)).long()  # 0 if token is in vocab, 1 if entity or unknown
-            _inp = _mask * 3 + (1.0 - _mask) * batch["text"]  # 3 is <UNK>, otherwise use token index
+            _mask = (
+                batch["text"] >= len(self.text_vocab)
+            ).long()  # 0 if token is in vocab, 1 if entity or unknown
+            _inp = (
+                _mask * 3 + (1.0 - _mask) * batch["text"]
+            )  # 3 is <UNK>, otherwise use token index
             tar_inp = self.tar_emb(_inp.long())
             # Note: x[:,:,None] <-> unsqueeze(-1)
 
             # embeddings for tokens in text vocab (0. if unknown or entity)
-            embeddings_text = (1.0 - _mask[:, :, None]) * tar_inp  # (bs, max_sent_len, d)
+            embeddings_text = (
+                1.0 - _mask[:, :, None]
+            ) * tar_inp  # (bs, max_sent_len, d)
             # embeddings for entity tokens (0. elsewhere)
             embeddings_ent = ent_enc[
                 torch.arange(len(batch["text"]))[:, None].to(device),
-                ((batch["text"] - len(self.text_vocab)) * _mask).long(),  # 0 for ENT_0 and other tokens, i for ENT_i
+                (
+                    (batch["text"] - len(self.text_vocab)) * _mask
+                ).long(),  # 0 for ENT_0 and other tokens, i for ENT_i
             ]  # (bs, max_sent_len, d)
-            embeddings_ent = embeddings_ent * _mask[:, :, None]  # set to 0. if not entity
+            embeddings_ent = (
+                embeddings_ent * _mask[:, :, None]
+            )  # set to 0. if not entity
             tar_inp = embeddings_text + embeddings_ent
             if self.config["vae_dim"] > 0:
                 mu, log_sigma = self.get_vae_qz(tar_inp)
